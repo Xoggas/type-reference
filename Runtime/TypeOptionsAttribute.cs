@@ -32,7 +32,7 @@ namespace TypeReferences
         /// <summary>Overrides the dropdown height in pixels (clamped to 100-600).</summary>
         public int DropdownHeight;
 
-        internal virtual bool MatchesRequirements(Type type)
+        public virtual bool MatchesRequirements(Type type)
         {
             bool passesExcluded = ExcludeTypes == null || !ExcludeTypes.Contains(type);
             bool passesSerializable = !SerializableOnly || IsUnitySerializable(type);

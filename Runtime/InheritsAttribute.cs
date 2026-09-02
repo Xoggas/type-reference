@@ -37,7 +37,7 @@ namespace TypeReferences
         /// <summary>Allows abstract classes and interfaces to be selected from the dropdown. Default: <c>false</c>.</summary>
         public bool AllowAbstract { get; set; }
 
-        internal override bool MatchesRequirements(Type type)
+        public override bool MatchesRequirements(Type type)
         {
             bool isBaseType = Array.IndexOf(_baseTypes, type) >= 0;
 

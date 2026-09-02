@@ -3,31 +3,47 @@ namespace TypeReferences.Editor
     using System.Reflection;
     using UnityEditor;
     using UnityEditor.IMGUI.Controls;
+    using UnityEditor.UIElements;
     using UnityEngine;
+    using UnityEngine.UIElements;
 
     [CustomPropertyDrawer(typeof(TypeReference))]
     internal sealed class TypeReferencePropertyDrawer : PropertyDrawer
     {
-        public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
+        public override VisualElement CreatePropertyGUI(SerializedProperty property)
         {
-            EditorGUI.BeginProperty(position, label, property);
-
-            var fieldRect = EditorGUI.PrefixLabel(position, label);
-
-            var typeNameProperty = property.FindPropertyRelative("_typeNameAndAssembly");
             var options = fieldInfo.GetCustomAttribute<TypeOptionsAttribute>();
 
-            string buttonLabel = string.IsNullOrEmpty(typeNameProperty.stringValue)
-                ? "None"
-                : GetDisplayName(typeNameProperty.stringValue, options != null && options.ShortName);
+            var root = new VisualElement { name = "type-reference-field" };
+            root.AddToClassList(BaseField<string>.ussClassName);
+            root.AddToClassList(PopupField<string>.ussClassName);
 
-            if (EditorGUI.DropdownButton(fieldRect, new GUIContent(buttonLabel), FocusType.Keyboard))
-                ShowDropdown(fieldRect, property, options);
+            var label = new Label(property.displayName);
+            label.AddToClassList(BaseField<string>.labelUssClassName);
+            root.Add(label);
 
-            EditorGUI.EndProperty();
+            var button = new Button { text = "None" };
+            button.AddToClassList(BaseField<string>.inputUssClassName);
+            button.AddToClassList(PopupField<string>.inputUssClassName);
+            root.Add(button);
+
+            void RefreshLabel(SerializedProperty prop)
+            {
+                string typeName = prop.FindPropertyRelative("_typeNameAndAssembly").stringValue;
+                button.text = string.IsNullOrEmpty(typeName)
+                    ? "None"
+                    : GetDisplayName(typeName, options != null && options.ShortName);
+            }
+
+            RefreshLabel(property);
+            root.TrackPropertyValue(property, RefreshLabel);
+
+            button.clicked += () => ShowDropdown(button.worldBound, property, options);
+
+            return root;
         }
 
-        private void ShowDropdown(Rect fieldRect, SerializedProperty property, TypeOptionsAttribute options)
+        private void ShowDropdown(Rect activatorRect, SerializedProperty property, TypeOptionsAttribute options)
         {
             var types = TypeCollector.GetTypes(fieldInfo, options);
             var serializedObject = property.serializedObject;
@@ -47,7 +63,7 @@ namespace TypeReferences.Editor
                 serializedObject.ApplyModifiedProperties();
             });
 
-            dropdown.Show(fieldRect);
+            dropdown.Show(activatorRect);
         }
 
         private static string GetDisplayName(string typeNameAndAssembly, bool shortName)
