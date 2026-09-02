@@ -2,11 +2,10 @@ namespace TypeReferences.Editor
 {
     using System;
     using System.Collections.Generic;
-    using System.Text;
     using UnityEditor.IMGUI.Controls;
     using UnityEngine;
 
-    /// <summary>A searchable, namespace-grouped dropdown used to pick a <see cref="Type"/> in the Inspector.</summary>
+    /// <summary>A searchable, flat dropdown used to pick a <see cref="Type"/> in the Inspector.</summary>
     internal sealed class TypeSelectionDropdown : AdvancedDropdown
     {
         private const string NoneLabel = "None";
@@ -28,9 +27,9 @@ namespace TypeReferences.Editor
 
             int height = options != null && options.DropdownHeight > 0
                 ? Mathf.Clamp(options.DropdownHeight, 100, 600)
-                : 300;
+                : Mathf.Clamp(30 + types.Count * 20, 100, 400);
 
-            minimumSize = new Vector2(minimumSize.x, height);
+            minimumSize = new Vector2(Mathf.Max(minimumSize.x, 250), height);
         }
 
         protected override AdvancedDropdownItem BuildRoot()
@@ -40,53 +39,15 @@ namespace TypeReferences.Editor
             if (_options == null || _options.ShowNoneElement)
                 root.AddChild(new TypeDropdownItem(null, NoneLabel));
 
-            var namespaceNodes = new Dictionary<string, AdvancedDropdownItem>();
             bool shortName = _options != null && _options.ShortName;
 
             foreach (var type in _types)
             {
-                var parent = GetOrCreateNamespaceNode(root, namespaceNodes, type.Namespace);
                 string displayName = shortName ? type.Name : type.FullName;
-                parent.AddChild(new TypeDropdownItem(type, displayName));
+                root.AddChild(new TypeDropdownItem(type, displayName));
             }
 
             return root;
-        }
-
-        private static AdvancedDropdownItem GetOrCreateNamespaceNode(
-            AdvancedDropdownItem root,
-            Dictionary<string, AdvancedDropdownItem> cache,
-            string @namespace)
-        {
-            if (string.IsNullOrEmpty(@namespace))
-                return root;
-
-            if (cache.TryGetValue(@namespace, out var existingNode))
-                return existingNode;
-
-            var segments = @namespace.Split('.');
-            var parent = root;
-            var pathBuilder = new StringBuilder();
-
-            foreach (var segment in segments)
-            {
-                if (pathBuilder.Length > 0)
-                    pathBuilder.Append('.');
-
-                pathBuilder.Append(segment);
-                string path = pathBuilder.ToString();
-
-                if (!cache.TryGetValue(path, out var node))
-                {
-                    node = new AdvancedDropdownItem(segment);
-                    parent.AddChild(node);
-                    cache[path] = node;
-                }
-
-                parent = node;
-            }
-
-            return parent;
         }
 
         protected override void ItemSelected(AdvancedDropdownItem item)

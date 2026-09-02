@@ -19,14 +19,18 @@ namespace TypeReferences.Editor
             if (Cache.TryGetValue(field, out var cached))
                 return cached;
 
-            var types = CollectTypes(filter).Distinct().OrderBy(t => t.FullName, StringComparer.Ordinal).ToList();
+            var types = CollectTypes(field, filter)
+                .Distinct()
+                .OrderBy(t => t.FullName, StringComparer.Ordinal)
+                .ToList();
+
             Cache[field] = types;
             return types;
         }
 
-        private static IEnumerable<Type> CollectTypes(TypeOptionsAttribute filter)
+        private static IEnumerable<Type> CollectTypes(FieldInfo field, TypeOptionsAttribute filter)
         {
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            foreach (var assembly in GetRelevantAssemblies(field))
             {
                 Type[] types;
 
@@ -54,6 +58,50 @@ namespace TypeReferences.Editor
                 if (type != null)
                     yield return type;
             }
+        }
+
+        // Only scans the field's own assembly and the assemblies it references (transitively), instead of
+        // every assembly loaded in the domain (which, in a Unity project, includes hundreds of unrelated
+        // Editor/package assemblies and makes scanning noticeably slow).
+        private static IEnumerable<Assembly> GetRelevantAssemblies(FieldInfo field)
+        {
+            var declaringAssembly = field.DeclaringType?.Assembly;
+
+            if (declaringAssembly == null)
+                return AppDomain.CurrentDomain.GetAssemblies();
+
+            var visited = new HashSet<string> { declaringAssembly.GetName().Name };
+            var queue = new Queue<Assembly>();
+            var result = new List<Assembly>();
+
+            queue.Enqueue(declaringAssembly);
+
+            while (queue.Count > 0)
+            {
+                var assembly = queue.Dequeue();
+                result.Add(assembly);
+
+                foreach (var referenceName in assembly.GetReferencedAssemblies())
+                {
+                    if (!visited.Add(referenceName.Name))
+                        continue;
+
+                    Assembly referencedAssembly;
+
+                    try
+                    {
+                        referencedAssembly = Assembly.Load(referenceName);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    queue.Enqueue(referencedAssembly);
+                }
+            }
+
+            return result;
         }
 
         private static bool IsSelectable(Type type, TypeOptionsAttribute filter)

@@ -17,14 +17,29 @@ namespace TypeReferences.Editor
             var root = new VisualElement { name = "type-reference-field" };
             root.AddToClassList(BaseField<string>.ussClassName);
             root.AddToClassList(PopupField<string>.ussClassName);
+            root.style.flexDirection = FlexDirection.Row;
+            root.style.alignItems = Align.Center;
+            root.style.minHeight = 18;
 
             var label = new Label(property.displayName);
             label.AddToClassList(BaseField<string>.labelUssClassName);
+            label.style.overflow = Overflow.Hidden;
+            label.style.textOverflow = TextOverflow.Ellipsis;
+            label.style.unityTextAlign = TextAnchor.MiddleLeft;
+            label.style.flexShrink = 0;
+            label.style.width = Length.Percent(40);
             root.Add(label);
 
             var button = new Button { text = "None" };
             button.AddToClassList(BaseField<string>.inputUssClassName);
             button.AddToClassList(PopupField<string>.inputUssClassName);
+            button.style.flexGrow = 1;
+            button.style.flexShrink = 1;
+            button.style.marginLeft = 0;
+            button.style.unityTextAlign = TextAnchor.MiddleLeft;
+            button.style.overflow = Overflow.Hidden;
+            button.style.whiteSpace = WhiteSpace.NoWrap;
+            button.style.textOverflow = TextOverflow.Ellipsis;
             root.Add(button);
 
             void RefreshLabel(SerializedProperty prop)
