@@ -1,8 +1,8 @@
 namespace TypeReferences.Editor
 {
+    using System.Collections.Generic;
     using System.Reflection;
     using UnityEditor;
-    using UnityEditor.IMGUI.Controls;
     using UnityEditor.UIElements;
     using UnityEngine;
     using UnityEngine.UIElements;
@@ -10,87 +10,140 @@ namespace TypeReferences.Editor
     [CustomPropertyDrawer(typeof(TypeReference))]
     internal sealed class TypeReferencePropertyDrawer : PropertyDrawer
     {
+        private const string TypeNamePropertyName = "_typeNameAndAssembly";
+        private const string GuidPropertyName = "GUID";
+        private const string NoneLabel = "None";
+        private const string MixedValueLabel = "\u2014";
+
+        public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
+        {
+            EditorGUI.BeginProperty(position, label, property);
+
+            var options = GetOptions();
+            var valueProperty = property.FindPropertyRelative(TypeNamePropertyName);
+            var buttonRect = EditorGUI.PrefixLabel(position, label);
+            var content = new GUIContent(GetDisplayValue(valueProperty, options));
+
+            if (EditorGUI.DropdownButton(buttonRect, content, FocusType.Keyboard))
+                OpenDropdown(buttonRect, property, options);
+
+            EditorGUI.EndProperty();
+        }
+
         public override VisualElement CreatePropertyGUI(SerializedProperty property)
         {
-            var options = fieldInfo.GetCustomAttribute<TypeOptionsAttribute>();
-
-            var root = new VisualElement { name = "type-reference-field" };
-            root.AddToClassList(BaseField<string>.ussClassName);
-            root.AddToClassList(PopupField<string>.ussClassName);
-            root.style.flexDirection = FlexDirection.Row;
-            root.style.alignItems = Align.Center;
-            root.style.minHeight = 18;
-
-            var label = new Label(property.displayName);
-            label.AddToClassList(BaseField<string>.labelUssClassName);
-            label.style.overflow = Overflow.Hidden;
-            label.style.textOverflow = TextOverflow.Ellipsis;
-            label.style.unityTextAlign = TextAnchor.MiddleLeft;
-            label.style.flexShrink = 0;
-            label.style.width = Length.Percent(40);
-            root.Add(label);
-
-            var button = new Button { text = "None" };
-            button.AddToClassList(BaseField<string>.inputUssClassName);
-            button.AddToClassList(PopupField<string>.inputUssClassName);
-            button.style.flexGrow = 1;
-            button.style.flexShrink = 1;
-            button.style.marginLeft = 0;
-            button.style.unityTextAlign = TextAnchor.MiddleLeft;
-            button.style.overflow = Overflow.Hidden;
-            button.style.whiteSpace = WhiteSpace.NoWrap;
-            button.style.textOverflow = TextOverflow.Ellipsis;
-            root.Add(button);
-
-            void RefreshLabel(SerializedProperty prop)
+            var options = GetOptions();
+            var choices = new List<string>(1);
+            var field = new DropdownField(property.displayName, choices, 0)
             {
-                string typeName = prop.FindPropertyRelative("_typeNameAndAssembly").stringValue;
-                button.text = string.IsNullOrEmpty(typeName)
-                    ? "None"
-                    : GetDisplayName(typeName, options != null && options.ShortName);
+                name = "type-reference-field",
+                tooltip = property.tooltip
+            };
+
+            // A real BaseField lets the Inspector align this exactly like its native fields.
+            field.AddToClassList(BaseField<string>.alignedFieldUssClassName);
+
+            void Refresh(SerializedProperty trackedProperty)
+            {
+                var valueProperty = trackedProperty.FindPropertyRelative(TypeNamePropertyName);
+                string displayValue = GetDisplayValue(valueProperty, options);
+
+                choices.Clear();
+                choices.Add(displayValue);
+                field.SetValueWithoutNotify(displayValue);
             }
 
-            RefreshLabel(property);
-            root.TrackPropertyValue(property, RefreshLabel);
+            Refresh(property);
+            field.TrackPropertyValue(property, Refresh);
 
-            button.clicked += () => ShowDropdown(button.worldBound, property, options);
-
-            return root;
-        }
-
-        private void ShowDropdown(Rect activatorRect, SerializedProperty property, TypeOptionsAttribute options)
-        {
-            var types = TypeCollector.GetTypes(fieldInfo, options);
-            var serializedObject = property.serializedObject;
-            var propertyPath = property.propertyPath;
-
-            var dropdown = new TypeSelectionDropdown(new AdvancedDropdownState(), types, options, selectedType =>
+            field.RegisterCallback<PointerDownEvent>(evt =>
             {
-                serializedObject.Update();
+                if (evt.button != 0)
+                    return;
 
-                var typeReferenceProperty = serializedObject.FindProperty(propertyPath);
-                typeReferenceProperty.FindPropertyRelative("_typeNameAndAssembly").stringValue =
-                    TypeReference.ToTypeNameAndAssembly(selectedType);
-                typeReferenceProperty.FindPropertyRelative("GUID").stringValue = selectedType != null
-                    ? TypeGuidLookup.GetGuidFromType(selectedType)
-                    : string.Empty;
+                evt.StopImmediatePropagation();
+                OpenDropdown(field.worldBound, property, options);
+            }, TrickleDown.TrickleDown);
 
-                serializedObject.ApplyModifiedProperties();
-            });
+            field.RegisterCallback<KeyDownEvent>(evt =>
+            {
+                if (evt.keyCode != KeyCode.Space &&
+                    evt.keyCode != KeyCode.Return &&
+                    evt.keyCode != KeyCode.KeypadEnter)
+                {
+                    return;
+                }
 
-            dropdown.Show(activatorRect);
+                evt.StopImmediatePropagation();
+                OpenDropdown(field.worldBound, property, options);
+            }, TrickleDown.TrickleDown);
+
+            return field;
         }
 
-        private static string GetDisplayName(string typeNameAndAssembly, bool shortName)
+        private TypeOptionsAttribute GetOptions()
         {
-            int commaIndex = typeNameAndAssembly.IndexOf(',');
-            string fullName = commaIndex >= 0 ? typeNameAndAssembly.Substring(0, commaIndex) : typeNameAndAssembly;
+            return fieldInfo?.GetCustomAttribute<TypeOptionsAttribute>();
+        }
 
-            if (!shortName)
+        private void OpenDropdown(Rect activatorRect, SerializedProperty property, TypeOptionsAttribute options)
+        {
+            var serializedObject = property.serializedObject;
+            string propertyPath = property.propertyPath;
+            string currentValue = property.FindPropertyRelative(TypeNamePropertyName).stringValue;
+            var types = TypeCollector.GetTypes(fieldInfo, options);
+
+            var dropdown = new TypeSelectionDropdown(
+                types,
+                options,
+                currentValue,
+                activatorRect.width,
+                selectedType => ApplySelection(serializedObject, propertyPath, selectedType));
+
+            UnityEditor.PopupWindow.Show(activatorRect, dropdown);
+        }
+
+        private static void ApplySelection(
+            SerializedObject serializedObject,
+            string propertyPath,
+            System.Type selectedType)
+        {
+            if (serializedObject == null || serializedObject.targetObject == null)
+                return;
+
+            serializedObject.Update();
+
+            var property = serializedObject.FindProperty(propertyPath);
+            if (property == null)
+                return;
+
+            property.FindPropertyRelative(TypeNamePropertyName).stringValue =
+                TypeReference.ToTypeNameAndAssembly(selectedType);
+            property.FindPropertyRelative(GuidPropertyName).stringValue =
+                selectedType == null ? string.Empty : TypeGuidLookup.GetGuidFromType(selectedType);
+
+            serializedObject.ApplyModifiedProperties();
+        }
+
+        private static string GetDisplayValue(
+            SerializedProperty valueProperty,
+            TypeOptionsAttribute options)
+        {
+            if (valueProperty.hasMultipleDifferentValues)
+                return MixedValueLabel;
+
+            string value = valueProperty.stringValue;
+            if (string.IsNullOrEmpty(value))
+                return NoneLabel;
+
+            int commaIndex = value.IndexOf(',');
+            string fullName = commaIndex < 0 ? value : value.Substring(0, commaIndex);
+
+            if (options == null || !options.ShortName)
                 return fullName;
 
-            int lastDot = fullName.LastIndexOf('.');
-            return lastDot >= 0 ? fullName.Substring(lastDot + 1) : fullName;
+            int separatorIndex = fullName.LastIndexOf('.');
+            return separatorIndex < 0 ? fullName : fullName.Substring(separatorIndex + 1);
         }
     }
 }

@@ -1,6 +1,7 @@
 namespace TypeReferences
 {
     using System;
+    using System.Collections.Generic;
     using System.Linq;
 
     /// <summary>
@@ -37,12 +38,15 @@ namespace TypeReferences
         /// <summary>Allows abstract classes and interfaces to be selected from the dropdown. Default: <c>false</c>.</summary>
         public bool AllowAbstract { get; set; }
 
+        /// <summary>Gets the base types used to filter the dropdown.</summary>
+        public IReadOnlyList<Type> BaseTypes => _baseTypes;
+
         public override bool MatchesRequirements(Type type)
         {
             bool isBaseType = Array.IndexOf(_baseTypes, type) >= 0;
 
             if (isBaseType)
-                return IncludeBaseType;
+                return IncludeBaseType && base.MatchesRequirements(type);
 
             bool passesAbstractConstraint = AllowAbstract || !type.IsAbstract;
             bool inheritsAllBaseTypes = _baseTypes.All(baseType => TypeExtensions.InheritsFrom(type, baseType));

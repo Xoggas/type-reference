@@ -4,117 +4,145 @@ namespace TypeReferences.Editor
     using System.Collections.Generic;
     using System.Linq;
     using System.Reflection;
+    using UnityEditor;
 
-    /// <summary>
-    /// Collects the types eligible for a <see cref="TypeReference"/> field's dropdown, given the field's
-    /// <see cref="TypeOptionsAttribute"/> (or <see cref="InheritsAttribute"/>) filter. Results are cached
-    /// per field for the lifetime of the current domain.
-    /// </summary>
+    /// <summary>Builds and caches the candidate list used by TypeReference fields.</summary>
     internal static class TypeCollector
     {
-        private static readonly Dictionary<FieldInfo, List<Type>> Cache = new Dictionary<FieldInfo, List<Type>>();
+        private static readonly Dictionary<FieldInfo, IReadOnlyList<Type>> FieldCache =
+            new Dictionary<FieldInfo, IReadOnlyList<Type>>();
 
-        public static List<Type> GetTypes(FieldInfo field, TypeOptionsAttribute filter)
+        private static readonly Dictionary<Type, IReadOnlyList<Type>> DerivedTypeCache =
+            new Dictionary<Type, IReadOnlyList<Type>>();
+
+        private static IReadOnlyList<Type> _allLoadedTypes;
+
+        public static IReadOnlyList<Type> GetTypes(FieldInfo field, TypeOptionsAttribute options)
         {
-            if (Cache.TryGetValue(field, out var cached))
+            if (field != null && FieldCache.TryGetValue(field, out var cached))
                 return cached;
 
-            var types = CollectTypes(field, filter)
+            var result = Collect(options)
+                .Where(type => IsSelectable(type, options))
+                .Concat(GetExplicitlyIncludedTypes(options))
                 .Distinct()
-                .OrderBy(t => t.FullName, StringComparer.Ordinal)
-                .ToList();
+                .OrderBy(type => type.FullName, StringComparer.Ordinal)
+                .ToArray();
 
-            Cache[field] = types;
-            return types;
-        }
-
-        private static IEnumerable<Type> CollectTypes(FieldInfo field, TypeOptionsAttribute filter)
-        {
-            foreach (var assembly in GetRelevantAssemblies(field))
-            {
-                Type[] types;
-
-                try
-                {
-                    types = assembly.GetTypes();
-                }
-                catch (ReflectionTypeLoadException e)
-                {
-                    types = e.Types.Where(t => t != null).ToArray();
-                }
-
-                foreach (var type in types)
-                {
-                    if (IsSelectable(type, filter))
-                        yield return type;
-                }
-            }
-
-            if (filter?.IncludeTypes == null)
-                yield break;
-
-            foreach (var type in filter.IncludeTypes)
-            {
-                if (type != null)
-                    yield return type;
-            }
-        }
-
-        // Only scans the field's own assembly and the assemblies it references (transitively), instead of
-        // every assembly loaded in the domain (which, in a Unity project, includes hundreds of unrelated
-        // Editor/package assemblies and makes scanning noticeably slow).
-        private static IEnumerable<Assembly> GetRelevantAssemblies(FieldInfo field)
-        {
-            var declaringAssembly = field.DeclaringType?.Assembly;
-
-            if (declaringAssembly == null)
-                return AppDomain.CurrentDomain.GetAssemblies();
-
-            var visited = new HashSet<string> { declaringAssembly.GetName().Name };
-            var queue = new Queue<Assembly>();
-            var result = new List<Assembly>();
-
-            queue.Enqueue(declaringAssembly);
-
-            while (queue.Count > 0)
-            {
-                var assembly = queue.Dequeue();
-                result.Add(assembly);
-
-                foreach (var referenceName in assembly.GetReferencedAssemblies())
-                {
-                    if (!visited.Add(referenceName.Name))
-                        continue;
-
-                    Assembly referencedAssembly;
-
-                    try
-                    {
-                        referencedAssembly = Assembly.Load(referenceName);
-                    }
-                    catch
-                    {
-                        continue;
-                    }
-
-                    queue.Enqueue(referencedAssembly);
-                }
-            }
+            if (field != null)
+                FieldCache[field] = result;
 
             return result;
         }
 
-        private static bool IsSelectable(Type type, TypeOptionsAttribute filter)
+        private static IEnumerable<Type> Collect(TypeOptionsAttribute options)
         {
-            if (type.FullName == null || type.FullName.IndexOf('<') >= 0)
+            if (!(options is InheritsAttribute inherits))
+                return GetAllLoadedTypes();
+
+            var candidates = GetSmallestCandidateSet(inherits.BaseTypes);
+
+            if (!inherits.IncludeBaseType)
+                return candidates;
+
+            return candidates.Concat(inherits.BaseTypes);
+        }
+
+        private static IReadOnlyList<Type> GetSmallestCandidateSet(IReadOnlyList<Type> baseTypes)
+        {
+            IReadOnlyList<Type> smallest = Array.Empty<Type>();
+
+            for (int i = 0; i < baseTypes.Count; i++)
+            {
+                var candidates = GetDerivedTypes(baseTypes[i]);
+
+                if (i == 0 || candidates.Count < smallest.Count)
+                    smallest = candidates;
+            }
+
+            return smallest;
+        }
+
+        private static IReadOnlyList<Type> GetDerivedTypes(Type baseType)
+        {
+            if (DerivedTypeCache.TryGetValue(baseType, out var cached))
+                return cached;
+
+            IReadOnlyList<Type> result;
+
+            try
+            {
+                result = TypeCache.GetTypesDerivedFrom(baseType).ToArray();
+            }
+            catch
+            {
+                result = GetAllLoadedTypes()
+                    .Where(type => type != baseType && baseType.IsAssignableFrom(type))
+                    .ToArray();
+            }
+
+            DerivedTypeCache[baseType] = result;
+            return result;
+        }
+
+        private static IReadOnlyList<Type> GetAllLoadedTypes()
+        {
+            if (_allLoadedTypes != null)
+                return _allLoadedTypes;
+
+            var result = new List<Type>();
+
+#pragma warning disable UAC0005
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+#pragma warning restore UAC0005
+            {
+                if (assembly == null || assembly.IsDynamic)
+                    continue;
+
+                try
+                {
+                    result.AddRange(assembly.GetTypes());
+                }
+                catch (ReflectionTypeLoadException exception)
+                {
+                    result.AddRange(exception.Types.Where(type => type != null));
+                }
+                catch
+                {
+                    // A broken optional assembly must not break every TypeReference field.
+                }
+            }
+
+            _allLoadedTypes = result;
+            return result;
+        }
+
+        private static IEnumerable<Type> GetExplicitlyIncludedTypes(TypeOptionsAttribute options)
+        {
+            if (options?.IncludeTypes == null)
+                yield break;
+
+            foreach (var type in options.IncludeTypes)
+            {
+                if (type != null && !IsExplicitlyExcluded(type, options))
+                    yield return type;
+            }
+        }
+
+        private static bool IsSelectable(Type type, TypeOptionsAttribute options)
+        {
+            if (type == null || type.FullName == null || type.FullName.IndexOf('<') >= 0)
                 return false;
 
-            bool allowInternal = filter != null && filter.AllowInternal;
-
-            if (!allowInternal && !type.IsVisible)
+            if (options != null && !options.AllowInternal && !type.IsVisible)
                 return false;
 
-            return filter == null || filter.MatchesRequirements(type);
+            return options == null || options.MatchesRequirements(type);
+        }
+
+        private static bool IsExplicitlyExcluded(Type type, TypeOptionsAttribute options)
+        {
+            return options.ExcludeTypes != null && Array.IndexOf(options.ExcludeTypes, type) >= 0;
         }
     }
 }
